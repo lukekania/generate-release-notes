@@ -1,0 +1,20 @@
+name: "Release Notes Generator"
+description: "Generate release notes from merged PRs since the previous tag"
+inputs:
+  github_token:
+    required: true
+  base_branch:
+    required: false
+    default: "main"
+  draft:
+    required: false
+    default: "true"
+  since_days:
+    required: false
+    default: "30"
+  max_prs:
+    required: false
+    default: "200"
+runs:
+  using: "node20"
+  main: "dist/index.js"
