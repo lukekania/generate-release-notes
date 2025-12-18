@@ -65,7 +65,7 @@ jobs:
   notes:
     runs-on: ubuntu-latest
     steps:
-      - uses: lukekania/release-notes-generator@v0.1.0
+      - uses: lukekania/generate-release-notes-@v0.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
