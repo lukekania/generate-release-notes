@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "commonjs",
   "dependencies": {
-    "@actions/core": "^2.0.1",
-    "@actions/github": "^6.0.0"
+    "@actions/core": "^2.0.2",
+    "@actions/github": "^7.0.0"
   },
   "devDependencies": {
     "@vercel/ncc": "^0.38.3"
