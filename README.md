@@ -77,9 +77,16 @@ jobs:
 | Input | Default | Description |
 |------|---------|-------------|
 | base_branch | main | Base branch PRs must be merged into |
-| draft | true | Create or update a draft GitHub Release |
+| create_release | true | Create or update a GitHub Release on tag push |
+| draft | true | Create the release as a draft |
 | since_days | 30 | Fallback lookback if no tags exist |
 | max_prs | 200 | Maximum number of PRs to include |
+| section_map | | JSON map of label to section name (overrides default grouping) |
+| exclude_labels | | Comma-separated labels to exclude PRs from release notes |
+| include_labels | | Comma-separated labels to include (only matching PRs appear) |
+| ignore_deps | false | Ignore PRs where all labels are dependency-related |
+| use_conventional_commits | false | Fall back to conventional commit prefixes when PRs have no labels |
+| preview_on_pr | false | Post a preview comment on PRs showing which section they belong to |
 
 ---
 
@@ -112,14 +119,7 @@ jobs:
 
 ## Possible Future Features
 
-- Label allowlist and denylist
-- Ignore dependency-only PRs
-- Custom section names
-- Conventional commit support
 - Changelog file generation
-- Tag comparison links
-- Summary-only mode
-- Preview comments on PRs
 
 ---
 

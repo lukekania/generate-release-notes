@@ -6,7 +6,12 @@ inputs:
   base_branch:
     required: false
     default: "main"
+  create_release:
+    description: "Create or update a GitHub Release on tag push"
+    required: false
+    default: "true"
   draft:
+    description: "Create the release as a draft"
     required: false
     default: "true"
   since_days:
@@ -15,6 +20,30 @@ inputs:
   max_prs:
     required: false
     default: "200"
+  section_map:
+    description: "JSON map of label → section name (overrides default grouping)"
+    required: false
+    default: ""
+  exclude_labels:
+    description: "Comma-separated labels to exclude PRs from release notes"
+    required: false
+    default: ""
+  include_labels:
+    description: "Comma-separated labels to include (only PRs with these labels appear)"
+    required: false
+    default: ""
+  ignore_deps:
+    description: "Ignore PRs where all labels are dependency-related"
+    required: false
+    default: "false"
+  use_conventional_commits:
+    description: "Fall back to conventional commit prefixes when PRs have no labels"
+    required: false
+    default: "false"
+  preview_on_pr:
+    description: "Post a preview comment on PRs showing which section they belong to"
+    required: false
+    default: "false"
 runs:
   using: "node20"
   main: "dist/index.js"

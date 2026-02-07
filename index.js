@@ -26,17 +26,57 @@ function escapeMd(s) {
   return String(s ?? "").replace(/\r?\n/g, " ").trim();
 }
 
-function bucketForLabels(labelNames) {
+const DEFAULT_LABEL_MAP = {
+  "bug": "Fixed", "fix": "Fixed", "bugfix": "Fixed",
+  "enhancement": "Added", "feat": "Added", "feature": "Added",
+  "chore": "Changed", "refactor": "Changed", "deps": "Changed", "dependencies": "Changed",
+  "docs": "Docs", "documentation": "Docs"
+};
+
+const CONVENTIONAL_PREFIX_MAP = {
+  "feat": "Added",
+  "fix": "Fixed",
+  "chore": "Changed",
+  "refactor": "Changed",
+  "docs": "Docs"
+};
+
+const DEPS_LABELS = new Set(["dependencies", "deps", "dependabot"]);
+
+function bucketForLabels(labelNames, sectionMap) {
   const names = (labelNames || []).map((l) => String(l).toLowerCase());
-
-  // Defaults: first match wins
-  const hasAny = (cands) => cands.some((c) => names.includes(c));
-
-  if (hasAny(["bug", "fix", "bugfix"])) return "Fixed";
-  if (hasAny(["enhancement", "feat", "feature"])) return "Added";
-  if (hasAny(["chore", "refactor", "deps", "dependencies"])) return "Changed";
-  if (hasAny(["docs", "documentation"])) return "Docs";
+  for (const name of names) {
+    if (sectionMap[name]) return sectionMap[name];
+  }
   return "Other";
+}
+
+function bucketFromConventionalTitle(title) {
+  const match = (title || "").match(/^(\w+)(?:\(.+?\))?:\s*/);
+  if (!match) return null;
+  return CONVENTIONAL_PREFIX_MAP[match[1].toLowerCase()] || null;
+}
+
+function parseCommaSeparated(s) {
+  return (s || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+}
+
+function shouldExcludePR(pr, { includeLabels, excludeLabels, ignoreDeps }) {
+  const labels = (pr.labels || []).map((l) => String(l).toLowerCase());
+
+  if (ignoreDeps && labels.length > 0 && labels.every((l) => DEPS_LABELS.has(l))) {
+    return true;
+  }
+
+  if (excludeLabels.length > 0 && labels.some((l) => excludeLabels.includes(l))) {
+    return true;
+  }
+
+  if (includeLabels.length > 0 && !labels.some((l) => includeLabels.includes(l))) {
+    return true;
+  }
+
+  return false;
 }
 
 function formatLine(pr) {
@@ -177,15 +217,46 @@ async function upsertReleaseByTag(octokit, { owner, repo, tag, body, draft }) {
   }
 }
 
+const PREVIEW_MARKER = "<!-- release-notes-preview:v0 -->";
+
+async function upsertComment(octokit, { owner, repo, issue_number, body }) {
+  const comments = await octokit.rest.issues.listComments({
+    owner, repo, issue_number, per_page: 100
+  });
+  const existing = comments.data.find((c) => (c.body || "").includes(PREVIEW_MARKER));
+  if (existing) {
+    await octokit.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+    return { updated: true, url: existing.html_url };
+  }
+  const created = await octokit.rest.issues.createComment({ owner, repo, issue_number, body });
+  return { updated: false, url: created.data.html_url };
+}
+
 // -------- main --------
 
 async function run() {
   try {
     const token = core.getInput("github_token", { required: true });
     const baseBranch = core.getInput("base_branch") || "main";
+    const createRelease = toBool(core.getInput("create_release"), true);
     const draft = toBool(core.getInput("draft"), true);
     const sinceDays = clampInt(core.getInput("since_days"), 30, 1, 3650);
     const maxPRs = clampInt(core.getInput("max_prs"), 200, 1, 1000);
+    const excludeLabels = parseCommaSeparated(core.getInput("exclude_labels"));
+    const includeLabels = parseCommaSeparated(core.getInput("include_labels"));
+    const ignoreDeps = toBool(core.getInput("ignore_deps"), false);
+    const useConventional = toBool(core.getInput("use_conventional_commits"), false);
+    const previewOnPR = toBool(core.getInput("preview_on_pr"), false);
+
+    let sectionMap = DEFAULT_LABEL_MAP;
+    const sectionMapRaw = core.getInput("section_map") || "";
+    if (sectionMapRaw) {
+      try {
+        sectionMap = JSON.parse(sectionMapRaw);
+      } catch {
+        core.warning("Could not parse section_map as JSON; using defaults.");
+      }
+    }
 
     const octokit = github.getOctokit(token);
     const { owner, repo } = github.context.repo;
@@ -246,6 +317,8 @@ async function run() {
       maxPRs
     });
 
+    const filtered = prs.filter((pr) => !shouldExcludePR(pr, { includeLabels, excludeLabels, ignoreDeps }));
+
     // Group PRs
     const buckets = new Map([
       ["Added", []],
@@ -255,8 +328,12 @@ async function run() {
       ["Other", []]
     ]);
 
-    for (const pr of prs) {
-      const b = bucketForLabels(pr.labels);
+    for (const pr of filtered) {
+      let b = bucketForLabels(pr.labels, sectionMap);
+      if (b === "Other" && useConventional) {
+        b = bucketFromConventionalTitle(pr.title) || "Other";
+      }
+      if (!buckets.has(b)) buckets.set(b, []);
       buckets.get(b).push(pr);
     }
 
@@ -272,7 +349,12 @@ async function run() {
         ? `Since tag **${currentTag}**`
         : `Since **${baselineISO}**`;
 
-    let body = `${title}\n\n${rangeLine}\n\n`;
+    let body = `${title}\n\n${rangeLine}\n`;
+
+    if (currentTag && previousTag) {
+      body += `[Full diff](https://github.com/${owner}/${repo}/compare/${previousTag}...${currentTag})\n`;
+    }
+    body += `\n`;
 
     const order = ["Added", "Fixed", "Changed", "Docs", "Other"];
     let total = 0;
@@ -294,20 +376,40 @@ async function run() {
     await writeSummary(body);
 
     // Optionally create/update release (only makes sense on tag runs)
-    if (draft) {
+    if (createRelease) {
       if (eventName === "push" && currentTag) {
         const res = await upsertReleaseByTag(octokit, {
           owner,
           repo,
           tag: currentTag,
           body,
-          draft: true
+          draft
         });
         core.info(`Release ${res.action}: ${res.url}`);
-        await writeSummary(`\n---\nDraft release ${res.action}: ${res.url}\n`);
+        await writeSummary(`\n---\n${draft ? "Draft release" : "Release"} ${res.action}: ${res.url}\n`);
       } else {
-        core.info("draft=true but this is not a tag push; skipping GitHub Release creation.");
-        await writeSummary(`\n---\nDraft release skipped (not a tag push).\n`);
+        core.info("create_release=true but this is not a tag push; skipping GitHub Release creation.");
+        await writeSummary(`\n---\nRelease creation skipped (not a tag push).\n`);
+      }
+    }
+
+    // Preview comment on PRs (feature 5.7)
+    if (previewOnPR && eventName === "pull_request") {
+      const prNumber = github.context.payload?.pull_request?.number;
+      if (prNumber) {
+        const prData = github.context.payload.pull_request;
+        const prLabels = (prData.labels || []).map((l) => l.name || l);
+        let section = bucketForLabels(prLabels, sectionMap);
+        if (section === "Other" && useConventional) {
+          section = bucketFromConventionalTitle(prData.title) || "Other";
+        }
+        const previewBody =
+          `### Release Notes Preview\n${PREVIEW_MARKER}\n\n` +
+          `This PR will appear in section: **${section}**\n\n` +
+          `Sample entry:\n` +
+          `${formatLine({ title: prData.title, number: prNumber, user: prData.user?.login || "unknown" })}\n`;
+        const c = await upsertComment(octokit, { owner, repo, issue_number: prNumber, body: previewBody });
+        core.info(`Preview comment ${c.updated ? "updated" : "created"}: ${c.url}`);
       }
     }
   } catch (err) {
