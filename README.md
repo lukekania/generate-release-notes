@@ -87,6 +87,7 @@ jobs:
 | ignore_deps | false | Ignore PRs where all labels are dependency-related |
 | use_conventional_commits | false | Fall back to conventional commit prefixes when PRs have no labels |
 | preview_on_pr | false | Post a preview comment on PRs showing which section they belong to |
+| changelog_file | | Path to write/prepend release notes (e.g., `CHANGELOG.md`). Empty = disabled. |
 
 ---
 
@@ -114,12 +115,6 @@ jobs:
 - Relies on GitHub Search API heuristics
 - Label quality affects grouping quality
 - Large repositories may need tighter limits
-
----
-
-## Possible Future Features
-
-- Changelog file generation
 
 ---
 

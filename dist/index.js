@@ -32838,6 +32838,8 @@ module.exports = parseParams
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
+const fs = __nccwpck_require__(9896);
+const path = __nccwpck_require__(6928);
 
 // -------- helpers --------
 
@@ -33070,6 +33072,34 @@ async function upsertComment(octokit, { owner, repo, issue_number, body }) {
   return { updated: false, url: created.data.html_url };
 }
 
+// -------- Changelog file --------
+
+function prependChangelog(filePath, newEntry) {
+  const resolved = path.resolve(filePath);
+  let existing = "";
+
+  if (fs.existsSync(resolved)) {
+    existing = fs.readFileSync(resolved, "utf8");
+  }
+
+  // If the file starts with a top-level heading, insert after it
+  const headerRe = /^# .+\n/;
+  const headerMatch = existing.match(headerRe);
+
+  let updated;
+  if (headerMatch) {
+    const afterHeader = existing.slice(headerMatch[0].length);
+    updated = headerMatch[0] + "\n" + newEntry + "\n" + afterHeader;
+  } else if (existing) {
+    updated = newEntry + "\n\n" + existing;
+  } else {
+    updated = "# Changelog\n\n" + newEntry + "\n";
+  }
+
+  fs.writeFileSync(resolved, updated, "utf8");
+  return resolved;
+}
+
 // -------- main --------
 
 async function run() {
@@ -33085,6 +33115,7 @@ async function run() {
     const ignoreDeps = toBool(core.getInput("ignore_deps"), false);
     const useConventional = toBool(core.getInput("use_conventional_commits"), false);
     const previewOnPR = toBool(core.getInput("preview_on_pr"), false);
+    const changelogFile = (core.getInput("changelog_file") || "").trim();
 
     let sectionMap = DEFAULT_LABEL_MAP;
     const sectionMapRaw = core.getInput("section_map") || "";
@@ -33229,6 +33260,12 @@ async function run() {
         core.info("create_release=true but this is not a tag push; skipping GitHub Release creation.");
         await writeSummary(`\n---\nRelease creation skipped (not a tag push).\n`);
       }
+    }
+
+    // Changelog file generation
+    if (changelogFile) {
+      const resolved = prependChangelog(changelogFile, body);
+      core.info(`Changelog updated: ${resolved}`);
     }
 
     // Preview comment on PRs (feature 5.7)

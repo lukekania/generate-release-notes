@@ -44,6 +44,10 @@ inputs:
     description: "Post a preview comment on PRs showing which section they belong to"
     required: false
     default: "false"
+  changelog_file:
+    description: "Path to write/prepend release notes (e.g., CHANGELOG.md). Empty = disabled."
+    required: false
+    default: ""
 runs:
   using: "node20"
   main: "dist/index.js"
