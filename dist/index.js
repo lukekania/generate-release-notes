@@ -60756,8 +60756,6 @@ async function run() {
     const rangeLine =
       currentTag && previousTag
         ? `From **${previousTag}** to **${currentTag}**`
-        : currentTag
-        ? `Since tag **${currentTag}**`
         : `Since **${baselineISO}**`;
 
     let body = `${title}\n\n${rangeLine}\n`;
