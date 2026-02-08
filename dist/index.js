@@ -60468,6 +60468,12 @@ function formatLine(pr) {
   return `- ${title} (#${num}) @${author}`;
 }
 
+function formatCommitLine(commit) {
+  const msg = escapeMd(commit.message);
+  const shortSha = commit.sha.slice(0, 7);
+  return `- ${msg} (${shortSha}) @${commit.author}`;
+}
+
 async function writeSummary(md) {
   await core.summary.addRaw(md).addEOL().write();
 }
@@ -60572,6 +60578,46 @@ async function searchMergedPRs(octokit, { owner, repo, baseBranch, mergedAfterIS
   // Sort stable-ish by PR number ascending for nicer reading
   out.sort((a, b) => a.number - b.number);
   return out;
+}
+
+async function listCommitsSince(octokit, { owner, repo, sha, since, max = 200 }) {
+  const out = [];
+  let page = 1;
+  while (out.length < max) {
+    const resp = await octokit.rest.repos.listCommits({
+      owner,
+      repo,
+      sha,
+      since,
+      per_page: 100,
+      page
+    });
+    if (!resp.data.length) break;
+    for (const c of resp.data) {
+      const firstLine = (c.commit.message || "").split("\n")[0];
+      out.push({
+        sha: c.sha,
+        message: firstLine,
+        author: c.author?.login || c.commit.author?.name || "unknown"
+      });
+      if (out.length >= max) break;
+    }
+    if (resp.data.length < 100) break;
+    page++;
+  }
+  return out;
+}
+
+function filterDirectCommits(commits, prNumbers) {
+  const prNums = new Set(prNumbers);
+  return commits.filter((c) => {
+    // Skip merge commits
+    if (/^Merge /.test(c.message)) return false;
+    // Skip commits referencing a known PR number, e.g. "(#42)"
+    const prRef = c.message.match(/\(#(\d+)\)/);
+    if (prRef && prNums.has(Number(prRef[1]))) return false;
+    return true;
+  });
 }
 
 async function upsertReleaseByTag(octokit, { owner, repo, tag, body, draft }) {
@@ -60748,6 +60794,26 @@ async function run() {
       buckets.get(b).push(pr);
     }
 
+    // Include direct commits when conventional commits mode is enabled
+    if (useConventional) {
+      const allCommits = await listCommitsSince(octokit, {
+        owner,
+        repo,
+        sha: baseBranch,
+        since: baselineISO,
+        max: maxPRs
+      });
+      const prNumbers = prs.map((pr) => pr.number);
+      const directCommits = filterDirectCommits(allCommits, prNumbers);
+
+      for (const commit of directCommits) {
+        const b = bucketFromConventionalTitle(commit.message);
+        if (!b) continue;
+        if (!buckets.has(b)) buckets.set(b, []);
+        buckets.get(b).push({ _commit: true, ...commit });
+      }
+    }
+
     const title =
       eventName === "push" && currentTag
         ? `## Release ${currentTag}`
@@ -60773,7 +60839,9 @@ async function run() {
       if (!items.length) continue;
       total += items.length;
       body += `### ${k}\n`;
-      for (const pr of items) body += `${formatLine(pr)}\n`;
+      for (const item of items) {
+        body += `${item._commit ? formatCommitLine(item) : formatLine(item)}\n`;
+      }
       body += `\n`;
     }
 
