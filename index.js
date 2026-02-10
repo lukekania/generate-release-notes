@@ -1,7 +1,7 @@
-const core = require("@actions/core");
-const github = require("@actions/github");
-const fs = require("fs");
-const path = require("path");
+import * as core from "@actions/core";
+import * as github from "@actions/github";
+import fs from "fs";
+import path from "path";
 
 // -------- helpers --------
 
