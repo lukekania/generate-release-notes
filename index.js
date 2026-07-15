@@ -228,14 +228,70 @@ async function listCommitsSince(octokit, { owner, repo, sha, since, max = 200 })
   return out;
 }
 
-function filterDirectCommits(commits, prNumbers) {
+async function fetchPRCommits(octokit, { owner, repo, prNumbers }) {
+  const byPR = new Map();
+  for (const pull_number of prNumbers) {
+    const commits = [];
+    let page = 1;
+    while (true) {
+      const resp = await octokit.rest.pulls.listCommits({
+        owner,
+        repo,
+        pull_number,
+        per_page: 100,
+        page
+      });
+      for (const c of resp.data) {
+        commits.push({
+          sha: c.sha,
+          message: (c.commit.message || "").split("\n")[0]
+        });
+      }
+      if (resp.data.length < 100) break;
+      page++;
+    }
+    byPR.set(pull_number, commits);
+  }
+  return byPR;
+}
+
+function collectShas(prCommitsByNumber) {
+  const shas = new Set();
+  for (const commits of prCommitsByNumber.values()) {
+    for (const c of commits) shas.add(c.sha);
+  }
+  return shas;
+}
+
+function inferBucketFromCommits(commits) {
+  const counts = new Map();
+  for (const c of commits) {
+    const bucket = bucketFromConventionalTitle(c.message);
+    if (!bucket) continue;
+    counts.set(bucket, (counts.get(bucket) || 0) + 1);
+  }
+  let best = null;
+  let bestCount = 0;
+  for (const [bucket, count] of counts) {
+    if (count > bestCount) {
+      best = bucket;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function filterDirectCommits(commits, prNumbers, prCommitShas) {
   const prNums = new Set(prNumbers);
   return commits.filter((c) => {
     // Skip merge commits
     if (/^Merge /.test(c.message)) return false;
-    // Skip commits referencing a known PR number, e.g. "(#42)"
+    // Skip commits referencing a known PR number, e.g. "(#42)" (squash merges)
     const prRef = c.message.match(/\(#(\d+)\)/);
     if (prRef && prNums.has(Number(prRef[1]))) return false;
+    // Skip commits that landed via a merged PR's branch (merge-commit workflows
+    // keep original messages with no PR reference)
+    if (prCommitShas.has(c.sha)) return false;
     return true;
   });
 }
@@ -396,6 +452,17 @@ async function run() {
 
     const filtered = prs.filter((pr) => !shouldExcludePR(pr, { includeLabels, excludeLabels, ignoreDeps }));
 
+    // PR commits are needed in conventional mode: to dedupe branch commits
+    // (merge-commit workflows) and to infer sections for non-conventional PR titles
+    let prCommitsByNumber = new Map();
+    if (useConventional) {
+      prCommitsByNumber = await fetchPRCommits(octokit, {
+        owner,
+        repo,
+        prNumbers: prs.map((pr) => pr.number)
+      });
+    }
+
     // Group PRs
     const buckets = new Map([
       ["Added", []],
@@ -408,7 +475,9 @@ async function run() {
     for (const pr of filtered) {
       let b = bucketForLabels(pr.labels, sectionMap);
       if (b === "Other" && useConventional) {
-        b = bucketFromConventionalTitle(pr.title) || "Other";
+        b = bucketFromConventionalTitle(pr.title)
+          || inferBucketFromCommits(prCommitsByNumber.get(pr.number) || [])
+          || "Other";
       }
       if (!buckets.has(b)) buckets.set(b, []);
       buckets.get(b).push(pr);
@@ -424,7 +493,7 @@ async function run() {
         max: maxPRs
       });
       const prNumbers = prs.map((pr) => pr.number);
-      const directCommits = filterDirectCommits(allCommits, prNumbers);
+      const directCommits = filterDirectCommits(allCommits, prNumbers, collectShas(prCommitsByNumber));
 
       for (const commit of directCommits) {
         const b = bucketFromConventionalTitle(commit.message);
